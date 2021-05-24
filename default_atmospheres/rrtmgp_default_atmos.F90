@@ -129,14 +129,15 @@ program rrtmgp_default_atmos
   logical :: top_at_1
 
   integer :: ncol, nlay, nbnd, ngpt, nUserArgs=0
-  integer :: b, nBlocks, colS, colE, nSubcols, nang
+  integer :: b, nBlocks, colS, colE, nSubcols, nangs
   integer :: blockSize = 0
-  character(len=6) :: block_size_char
+  character(len=256) :: rt_description = 'radiative transfer model scheme'
   !
   ! k-distribution file and input-output files must be paired: LW or SW
   !
   character(len=256) :: k_dist_file = 'coefficients.nc'
   character(len=256) :: input_file  = "rrtmgp-flux-inputs-outputs.nc"
+  character(len=2) :: lw_rt_method = "QA"
   real(wp), parameter :: pi = acos(-1._wp)
   ! ----------------------------------------------------------------------------------
   ! Code
@@ -150,17 +151,13 @@ program rrtmgp_default_atmos
      print *, "arguments:                                                       "
      print *, "    input_file   file containing atmos profile information       "
      print *, "    k_dist_file  file containing spectral discretization         "
-     print *, "    blockSize    number of columns to process at once (optional) "
+     print *, "    LW RT method choices are QA or OA (required for LW calcs with 1 ang) "
      stop
   else
      call get_command_argument(1, input_file)
      call get_command_argument(2, k_dist_file)
   end if
-  if (nUserArgs >= 3) then
-    call get_command_argument(3, block_size_char)
-    read(block_size_char, '(i6)') blockSize
-  end if
-  if (nUserArgs >  4) print *, "Ignoring command line arguments beyond the first three..."
+  if (nUserArgs >  3) print *, "Ignoring command line arguments beyond the first three..."
   !
   ! Read temperature, pressure, gas concentrations, then variables specific
   !  to LW or SW problems. Arrays are allocated as they are read
@@ -169,7 +166,13 @@ program rrtmgp_default_atmos
   if(is_lw(input_file)) then
     call read_lw_bc(input_file, t_sfc, emis_sfc)
     ! Number of quadrature angles
-    call read_lw_rt(input_file, nang)
+    call read_lw_rt(input_file, nangs)
+    if (nangs .eq. 1) then
+        call get_command_argument(3, lw_rt_method)
+        if (trim(lw_rt_method) .ne. 'QA' .and. trim(lw_rt_method) .ne. 'OA') then
+            call stop_on_err("rrtmgp_default_atmos: invalid declaration of RT type (need OA or QA)")
+        endif
+    endif
   else
     call read_sw_bc(input_file, sza, tsi, tsi_scaling, sfc_alb_dir, sfc_alb_dif)
     allocate(mu0(size(sza)))
@@ -243,13 +246,21 @@ program rrtmgp_default_atmos
     !
     ! Loop over subsets of the problem
     !
-    do b = 1, nBlocks
-      colS = (b-1) * blockSize + 1
-      colE =  b    * blockSize
-      nSubcols = colE-colS+1
-      call compute_fluxes(colS, colE)
-    end do
-
+    if(is_sw(input_file)) then
+        do b = 1, nBlocks
+            colS = (b-1) * blockSize + 1
+            colE =  b    * blockSize
+            nSubcols = colE-colS+1
+            call compute_fluxes(colS, colE)
+        end do
+    else
+        do b = 1, nBlocks
+            colS = (b-1) * blockSize + 1
+            colE =  b    * blockSize
+            nSubcols = colE-colS+1
+            call compute_fluxes(colS, colE, nangs=nangs, lw_rt_method=lw_rt_method)
+        end do
+    endif
     !
     ! Do any leftover columns
     !
@@ -271,11 +282,11 @@ program rrtmgp_default_atmos
       if(is_sw(input_file)) then
         if(allocated(toa_flux)) deallocate(toa_flux)
         allocate(toa_flux(nSubcols, ngpt))
+        call compute_fluxes(colS, colE)
       else
         call stop_on_err(lw_sources%alloc(nSubcols, nlay))
+        call compute_fluxes(colS, colE, nangs=nangs, lw_rt_method=lw_rt_method)
       end if
-
-      call compute_fluxes(colS, colE)
     end if
 
     !
@@ -295,15 +306,20 @@ program rrtmgp_default_atmos
   ! ... and write everything out
   !
   call write_spectral_disc(input_file, optical_props)
-  call write_fluxes(input_file, flux_up, flux_dn, flux_net, bnd_flux_up, bnd_flux_dn, bnd_flux_net)
-  call write_heating_rates(input_file, heating_rate, bnd_heating_rate)
+  call write_fluxes(input_file, rt_description, flux_up, flux_dn, flux_net, bnd_flux_up, bnd_flux_dn, bnd_flux_net)
+  call write_heating_rates(input_file, rt_description, heating_rate, bnd_heating_rate)
   if(k_dist%source_is_external()) &
-    call write_dir_fluxes(input_file, flux_dir, bnd_flux_dir)
+    call write_dir_fluxes(input_file, rt_description, flux_dir, bnd_flux_dir)
 
 contains
 
-subroutine compute_fluxes(colS, colE)
+subroutine compute_fluxes(colS, colE, nangs, lw_rt_method)
   integer, intent(in) :: colS, colE
+  integer, optional :: nangs
+  character(len=2), optional :: lw_rt_method
+
+  integer :: ncol, ngpt
+  real(wp), dimension(:,:), allocatable :: optimal_angles ! linear fit to column transmissivity (ncol,ngpt)
   !
   ! This routine compute fluxes: LW or SW, without or without col_dry provided to gas_optics()
   !   Most variables come from the host program; this just keeps us from repeating a bunch of code
@@ -319,7 +335,6 @@ subroutine compute_fluxes(colS, colE)
     fluxes%flux_dn_dir     => flux_dir(colS:colE,:)
     fluxes%bnd_flux_dn_dir  => bnd_flux_dir(colS:colE,:,:)
   end if
-
   call stop_on_err(gas_concs%get_subset(colS, nSubcols, gas_concs_subset))
   if(is_sw(input_file)) then
     !
@@ -350,6 +365,7 @@ subroutine compute_fluxes(colS, colE)
     !
     ! Radiative transfer
     !
+    rt_description = 'shortwave 2-stream solution'
     call stop_on_err(rte_sw(optical_props,               &
                                top_at_1,                 &
                                mu0(colS:colE),           &
@@ -384,11 +400,32 @@ subroutine compute_fluxes(colS, colE)
     !
     ! Radiative transfer
     !
-    call stop_on_err(rte_lw(optical_props,            &
+    if (nangs .eq. 1 .AND. lw_rt_method .eq. 'OA') then
+        rt_description = 'longwave optimal angle solution'
+        ! Compute optimal single
+        ncol = optical_props%get_ncol()
+        ngpt = optical_props%get_ngpt()
+        if(allocated(optimal_angles)) deallocate(optimal_angles)
+        allocate(optimal_angles(ncol,ngpt))
+        call stop_on_err(k_dist%compute_optimal_angles(optical_props, optimal_angles))
+        call stop_on_err(rte_lw(optical_props,            &
                                top_at_1,              &
                                lw_sources,            &
                                emis_sfc(1:nbnd,colS:colE), &
-                               fluxes, n_gauss_angles = nang))
+                               fluxes, &
+                               use_2stream = .false., &
+                               n_gauss_angles = nangs, &
+                               lw_Ds = optimal_angles))
+    else
+        rt_description = 'longwave 3-angle gaussian solution'
+        call stop_on_err(rte_lw(optical_props,            &
+                               top_at_1,              &
+                               lw_sources,            &
+                               emis_sfc(1:nbnd,colS:colE), &
+                               fluxes, &
+                               use_2stream = .false., &
+                               n_gauss_angles = nangs))
+    endif
   end if
 end subroutine compute_fluxes
 end program rrtmgp_default_atmos

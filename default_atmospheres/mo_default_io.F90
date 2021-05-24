@@ -339,15 +339,16 @@ contains
   !
   ! Write broadband and by-band fluxes
   !
-  subroutine write_fluxes(fileName, flux_up, flux_dn, flux_net, bnd_flux_up, bnd_flux_dn, bnd_flux_net)
+  subroutine write_fluxes(fileName, rt_description, flux_up, flux_dn, flux_net, bnd_flux_up, bnd_flux_dn, bnd_flux_net)
     character(len=*),           intent(in) :: fileName
+    character(len=*),           intent(in) :: rt_description
     real(wp), dimension(:,:  ), intent(in) ::     flux_up,     flux_dn,     flux_net
     real(wp), dimension(:,:,:), optional, &
                                 intent(in) :: bnd_flux_up, bnd_flux_dn, bnd_flux_net
     ! -------------------
-    integer :: ncid
+    integer :: ncid, varid
     integer :: ncol, nlev, nband
-    real(wp), dimension(:,:,:), allocatable :: bnd_flux_out
+
     ! -------------------
     if(nf90_open(trim(fileName), NF90_WRITE, ncid) /= NF90_NOERR) &
       call stop_on_err("write_fluxes: can't open file " // trim(fileName))
@@ -366,15 +367,53 @@ contains
     if(present(bnd_flux_dn )) call create_var(ncid, "band_flux_dn",  ["band", "col ", "lev "], [nband, ncol, nlev])
     if(present(bnd_flux_net)) call create_var(ncid, "band_flux_net", ["band", "col ", "lev "], [nband, ncol, nlev])
 
+    ! Upward Flux
     call stop_on_err(write_field(ncid, "flux_up",  flux_up ))
+    if(nf90_inq_varid(ncid, trim("flux_up"), varid) /= NF90_NOERR) &
+      call stop_on_err("Can't find variable " // trim("flux_up"))
+    print*,'RT-desc',rt_description,varid
+    !if(nf90_put_att(ncid, varid, "description", trim(rt_description)) /= NF90_NOERR) &
+    !  call stop_on_err("Can't write 'description' attribute to variable " // trim(rt_description))
+
+    ! Downward Flux
     call stop_on_err(write_field(ncid, "flux_dn",  flux_dn ))
+    if(nf90_inq_varid(ncid, trim("flux_dn"), varid) /= NF90_NOERR) &
+      call stop_on_err("Can't find variable " // trim("flux_dn"))
+    !(nf90_put_att(ncid, varid, "description", trim(rt_description)) /= NF90_NOERR) &
+     ! call stop_on_err("Can't write 'description' attribute to variable " // trim("flux_dn"))
+
+    ! Net Flux
     call stop_on_err(write_field(ncid, "flux_net", flux_net))
+    if(nf90_inq_varid(ncid, trim("flux_net"), varid) /= NF90_NOERR) &
+      call stop_on_err("Can't find variable " // trim("flux_net"))
+    !if(nf90_put_att(ncid, varid, "description", trim(rt_description)) /= NF90_NOERR) &
+      !call stop_on_err("Can't write 'description' attribute to variable " // trim("flux_net"))
+
     ! col,lay,bnd -> bnd,col,lay
-    allocate(bnd_flux_out(nband, ncol, nlev))
-    if(present(bnd_flux_up )) call stop_on_err(write_field(ncid, "band_flux_up",  reorder(bnd_flux_up )))
-    if(present(bnd_flux_dn )) call stop_on_err(write_field(ncid, "band_flux_dn",  reorder(bnd_flux_dn )))
-    if(present(bnd_flux_net)) call stop_on_err(write_field(ncid, "band_flux_net", reorder(bnd_flux_net)))
-    deallocate(bnd_flux_out)
+
+    if(present(bnd_flux_up )) then
+        call stop_on_err(write_field(ncid, "band_flux_up",  reorder(bnd_flux_up )))
+        if(nf90_inq_varid(ncid, trim("band_flux_up"), varid) /= NF90_NOERR) &
+          call stop_on_err("Can't find variable " // trim("band_flux_up"))
+        !if(nf90_put_att(ncid, varid, "description", trim(rt_description)) /= NF90_NOERR) &
+         ! call stop_on_err("Can't write 'description' attribute to variable " // trim("band_flux_up"))
+    endif
+
+    if(present(bnd_flux_dn )) then
+        call stop_on_err(write_field(ncid, "band_flux_dn",  reorder(bnd_flux_dn )))
+        if(nf90_inq_varid(ncid, trim("band_flux_dn"), varid) /= NF90_NOERR) &
+          call stop_on_err("Can't find variable " // trim("band_flux_dn"))
+        !if(nf90_put_att(ncid, varid, "description", trim(rt_description)) /= NF90_NOERR) &
+          !call stop_on_err("Can't write 'description' attribute to variable " // trim("band_flux_dn"))
+    endif
+
+    if(present(bnd_flux_net)) then
+        call stop_on_err(write_field(ncid, "band_flux_net", reorder(bnd_flux_net)))
+        if(nf90_inq_varid(ncid, trim("band_flux_net"), varid) /= NF90_NOERR) &
+          call stop_on_err("Can't find variable " // trim("band_flux_net"))
+        !if(nf90_put_att(ncid, varid, "description", trim(rt_description)) /= NF90_NOERR) &
+        !  call stop_on_err("Can't write 'description' attribute to variable " // trim("band_flux_net"))
+    endif
 
     ncid = nf90_close(ncid)
   end subroutine write_fluxes
@@ -434,15 +473,16 @@ contains
   !
   ! Write direct-beam fluxes
   !
-  subroutine write_dir_fluxes(fileName, flux_dir, bnd_flux_dir)
+  subroutine write_dir_fluxes(fileName, rt_description, flux_dir, bnd_flux_dir)
     character(len=*),           intent(in) :: fileName
+    character(len=*),           intent(in) :: rt_description
     real(wp), dimension(:,:  ), intent(in) ::     flux_dir
     real(wp), dimension(:,:,:), optional, &
                                 intent(in) :: bnd_flux_dir
     ! -------------------
-    integer :: ncid
+    integer :: ncid, varid
     integer :: ncol, nlay, nband
-    real(wp), allocatable, dimension(:,:,:) :: bnd_flux_out
+
     ! -------------------
     if(nf90_open(trim(fileName), NF90_WRITE, ncid) /= NF90_NOERR) &
       call stop_on_err("write_dir_fluxes: can't open file " // trim(fileName))
@@ -461,6 +501,18 @@ contains
     call stop_on_err(write_field(ncid, "flux_dir_dn",  flux_dir))
     if(present(bnd_flux_dir)) call stop_on_err(write_field(ncid, "band_flux_dir_dn",  reorder(bnd_flux_dir)))
 
+    if(nf90_inq_varid(ncid, trim("flux_dir_dn"), varid) /= NF90_NOERR) &
+      call stop_on_err("Can't find variable " // trim("flux_dir_dn"))
+    !if(nf90_put_att(ncid, varid, "description", trim(rt_description)) /= NF90_NOERR) &
+      !call stop_on_err("Can't write 'description' attribute to variable " // trim("flux_dir_dn"))
+
+    if(present(bnd_flux_dir)) then
+        if(nf90_inq_varid(ncid, trim("band_flux_dir_dn"), varid) /= NF90_NOERR) &
+            call stop_on_err("Can't find variable " // trim("band_flux_dir_dn"))
+        !if(nf90_put_att(ncid, varid, "description", trim(rt_description)) /= NF90_NOERR) &
+            !call stop_on_err("Can't write 'description' attribute to variable " // trim("band_flux_dir_dn"))
+    endif
+
     ncid = nf90_close(ncid)
   end subroutine write_dir_fluxes
   subroutine write_dir_fluxes_nCase(fileName, flux_dir, bnd_flux_dir)
@@ -471,7 +523,7 @@ contains
     ! -------------------
     integer :: ncid
     integer :: ncol, nlay, nband, nCase, icase
-    real(wp), dimension(:,:,:), allocatable :: bnd_flux_out
+
     ! -------------------
     if(nf90_open(trim(fileName), NF90_WRITE, ncid) /= NF90_NOERR) &
       call stop_on_err("write_dir_fluxes: can't open file " // trim(fileName))
@@ -501,12 +553,14 @@ contains
   !
   ! Write heating rates (broadband, by-band)
   !
-  subroutine write_heating_rates(fileName, heating_rate, bnd_heating_rate)
+  subroutine write_heating_rates(fileName, rt_description, heating_rate, bnd_heating_rate)
     character(len=*),           intent(in) :: fileName
+    character(len=*),           intent(in) :: rt_description
     real(wp), dimension(:,:  ), intent(in) ::     heating_rate
-    real(wp), dimension(:,:,:), intent(in) :: bnd_heating_rate
+    real(wp), dimension(:,:,:), optional, &
+                                intent(in) :: bnd_heating_rate
     ! -------------------
-    integer :: ncid
+    integer :: ncid, varid
     integer :: ncol, nlay, nband
     real(wp), dimension(:,:,:), allocatable :: bnd_heating_out
     ! -------------------
@@ -522,13 +576,26 @@ contains
     nband = get_dim_size(ncid, 'band')
 
     call create_var(ncid,      "heating_rate",          ["col", "lay"],         [ncol, nlay])
-    call create_var(ncid, "band_heating_rate", ["band", "col ", "lay "], [nband, ncol, nlay])
+    if(present(bnd_heating_rate)) call create_var(ncid, "band_heating_rate", ["band", "col ", "lay "], [nband, ncol, nlay])
 
     call stop_on_err(write_field(ncid,     "heating_rate",                     heating_rate))
-    call stop_on_err(write_field(ncid, "band_heating_rate", reorder(bnd_heating_rate)))
+    if(present(bnd_heating_rate)) call stop_on_err(write_field(ncid, "band_heating_rate", reorder(bnd_heating_rate)))
+
+    if(nf90_inq_varid(ncid, trim("heating_rate"), varid) /= NF90_NOERR) &
+      call stop_on_err("Can't find variable " // trim("heating_rate"))
+    !if(nf90_put_att(ncid, varid, "description", trim(rt_description)) /= NF90_NOERR) &
+      !call stop_on_err("Can't write 'description' attribute to variable " // trim("eating_rate"))
+
+    if(present(bnd_heating_rate)) then
+        if(nf90_inq_varid(ncid, trim("band_heating_rate"), varid) /= NF90_NOERR) &
+            call stop_on_err("Can't find variable " // trim("band_heating_rate"))
+        !if(nf90_put_att(ncid, varid, "description", trim(rt_description)) /= NF90_NOERR) &
+            !call stop_on_err("Can't write 'description' attribute to variable " // trim("band_heating_rate"))
+    endif
 
     ncid = nf90_close(ncid)
   end subroutine write_heating_rates
+
   subroutine write_heating_rates_nCase(fileName, heating_rate, bnd_heating_rate)
     character(len=*),             intent(in) :: fileName
     real(wp), dimension(:,:  ,:), intent(in) ::     heating_rate

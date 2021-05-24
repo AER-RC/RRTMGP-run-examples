@@ -2,13 +2,6 @@
 # Need to set variables RRTMGP_ROOT, FC, FCGLAGS
 # e.g. export FC=ifort; export FCFLAGS='-m64 -O3 -traceback -assume realloc_lhs -extend-source 132 -qopt-report-phase=vec'
 #
-# default fixes
-NCHOME = /usr/local/Cellar/netcdf/4.7.4_2/
-NFHOME = /usr/local/Cellar/netcdf/4.7.4_2/
-FCFLAGS = -ffree-line-length-none -m64 -std=f2008 -march=native -pedantic -g -fbounds-check -Wall -fbacktrace -finit-real=nan -DUSE_CBOOL
-FC = gfortran
-# End default fixes
-#
 # Location of RTE+RRTMGP libraries, module files.
 #
 RRTMGP_BUILD = $(RRTMGP_ROOT)/build
