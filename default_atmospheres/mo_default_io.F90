@@ -20,7 +20,7 @@ module mo_default_io
                                    ty_optical_props_1scl, ty_optical_props_2str, ty_optical_props_nstr
   use mo_source_functions,   only: ty_source_func_lw
   use mo_gas_concentrations, only: ty_gas_concs
-  use mo_rrtmgp_util_reorder
+  !use mo_rrtmgp_util_reorder
   use mo_simple_netcdf,      only: read_field, read_string, var_exists, get_dim_size, &
                                    write_field, create_dim, create_var
   use netcdf
@@ -49,9 +49,61 @@ contains
   function reorder(arr_in) result(arr_out)
      real(wp), dimension(:,:,:), intent(in) :: arr_in
      real(wp), dimension(size(arr_in, 3), size(arr_in, 1), size(arr_in, 2)) :: arr_out
-     call reorder123x312(arr_in, arr_out)
+
+     integer :: d1, d2, d3
+
+     d1 = size(arr_in,dim=1)
+     d2 = size(arr_in,dim=2)
+     d3 = size(arr_in,dim=3)     
+
+     call reorder_123x312_kernel(d1, d2, d3, arr_in, arr_out)
   end function reorder
-  !--------------------------------------------------------------------------------------------------------------------
+
+  subroutine reorder_123x312_kernel(d1, d2, d3, array_in, array_out) &
+      bind(C, name = "reorder_123x312_kernel")
+    integer,                         intent( in) :: d1, d2, d3
+    real(wp), dimension(d1, d2, d3), intent( in) :: array_in
+    real(wp), dimension(d3, d1, d2), intent(out) :: array_out
+
+    integer :: i1, i2, i3, i10, i30, i1diff, i3diff
+    integer, parameter :: tile = 32
+
+    ! This kernel uses blocking to speed-up the transposition
+    ! We read the data block by block (three outer loops)
+    !  such that a block fits into fastest cache and the memory reads
+    !  are resolved in the cache. The writes are contiguous here, so
+    !  shouldn't be a problem.
+    !  Tile size of 32x32 is empirical: big enough to read from the whole
+    !  cache line, and small enough to fit into cache. Other numbers
+    !  may give slightly better performance on different hardware.
+    !
+    !$acc parallel vector_length(tile*tile) &
+    !$acc&     copyout(array_out) &
+    !$acc&     copyin(array_in)
+    !$acc loop gang collapse(3)
+    !$omp target teams distribute parallel do simd collapse(3) map(to:array_in) map(from:array_out)
+    do i2 = 1, d2
+      do i10 = 1, d1, tile
+        do i30 = 1, d3, tile
+
+          !$acc loop vector collapse(2)
+          do i1diff = 0, tile-1
+            do i3diff = 0, tile-1
+              i1 = i10 + i1diff
+              i3 = i30 + i3diff
+              if (i1 > d1 .or. i3 > d3) cycle
+
+              array_out(i3,i1,i2) = array_in(i1,i2,i3)
+            end do
+          end do
+
+        end do
+      end do
+    end do
+    !$acc end parallel
+
+  end subroutine reorder_123x312_kernel
+!--------------------------------------------------------------------------------------------------------------------
   !
   ! Read profiles for all columns  -- T, p, and gas concentrations
   !   Allocation occurs on assignments (says the F2003 standard)
